@@ -7,11 +7,16 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Check Visual Studio
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
 
       - name: Configure CMake
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -22,16 +27,21 @@ jobs:
       - name: Package EXE
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist
-          Get-ChildItem build -Recurse -Filter "CHM Voice MIDI.exe" |
-            Copy-Item -Destination dist
+          New-Item -ItemType Directory -Force dist | Out-Null
 
-          if (!(Test-Path "dist/CHM Voice MIDI.exe")) {
-            throw "EXE not found"
+          $exe = Get-ChildItem build -Recurse -Filter "*.exe" |
+            Where-Object { $_.Name -like "*CHM*Voice*MIDI*" } |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "CHM Voice MIDI EXE not found"
           }
+
+          Copy-Item $exe.FullName -Destination dist/
 
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
           name: CHM-Voice-MIDI-Windows
-          path: dist/*
+          path: dist/*.exe
+          if-no-files-found: error

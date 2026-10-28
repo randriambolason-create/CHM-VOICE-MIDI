@@ -10,9 +10,33 @@ class VoiceComponent final : public juce::AudioAppComponent, private juce::Timer
 public:
     VoiceComponent()
     {
+        setOpaque(true);
+        auto cyan = juce::Colour(0xff35d9d1);
+        for (auto* b : { &audioButton, &startButton, &refreshButton, &recordButton, &saveButton, &panic, &routingHelp })
+        {
+            b->setColour(juce::TextButton::buttonColourId, juce::Colour(0xff273342));
+            b->setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+        }
+        startButton.setColour(juce::TextButton::buttonColourId, cyan);
+        startButton.setColour(juce::TextButton::textColourOffId, juce::Colour(0xff071b20));
+        for (auto* cb : { &midiSelector, &modeSelector, &keySelector, &scaleSelector, &channelSelector })
+        {
+            cb->setColour(juce::ComboBox::backgroundColourId, juce::Colour(0xff273342));
+            cb->setColour(juce::ComboBox::textColourId, juce::Colours::white);
+            cb->setColour(juce::ComboBox::outlineColourId, juce::Colour(0xff344757));
+        }
+        for (auto* l : { &status, &gateLabel, &noteLabel })
+            l->setColour(juce::Label::textColourId, juce::Colour(0xffd6e5ec));
+
+        addAndMakeVisible(audioButton);
+        audioButton.setButtonText("MIC / AUDIO SETTINGS");
+        audioButton.onClick = [this] { showAudioSettings(); };
+        addAndMakeVisible(startButton);
+        startButton.setButtonText("START VOICE MIDI");
+        startButton.onClick = [this] { running = !running; if (!running) stopNote(); startButton.setButtonText(running ? "STOP VOICE MIDI" : "START VOICE MIDI"); };
         addAndMakeVisible(status);
         status.setJustificationType(juce::Justification::centred);
-        status.setText("CHM VOICE MIDI | waiting for microphone", juce::dontSendNotification);
+        status.setText("Select MIC / AUDIO SETTINGS, then MIDI output, then START", juce::dontSendNotification);
         addAndMakeVisible(midiSelector);
         midiSelector.onChange = [this] { openMidi(); };
         addAndMakeVisible(refreshButton);
@@ -67,7 +91,7 @@ public:
         addAndMakeVisible(panic);
         panic.setButtonText("Stop MIDI notes");
         panic.onClick = [this] { stopNote(); };
-        setSize(680, 530);
+        setSize(520, 608);
         setAudioChannels(1, 0);
         refreshMidi();
         startTimerHz(20);
@@ -85,28 +109,83 @@ public:
             ring[w % ringSize].store(input[i], std::memory_order_relaxed);
         }
     }
+    void paint(juce::Graphics& g) override
+    {
+        const auto bg = juce::Colour(0xff101720);
+        const auto panel = juce::Colour(0xff1b2633);
+        const auto cyan = juce::Colour(0xff35d9d1);
+        g.fillAll(bg);
+        auto roundedPanel = [&](float x, float y, float w, float h)
+        {
+            g.setColour(panel);
+            g.fillRoundedRectangle(x, y, w, h, 13.0f);
+        };
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(juce::FontOptions(22.0f, juce::Font::bold)));
+        g.drawText("CHM", 22, 14, 58, 34, juce::Justification::centredLeft);
+        g.setColour(cyan);
+        g.drawText("VOICE MIDI", 82, 14, 215, 34, juce::Justification::centredLeft);
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.setColour(juce::Colour(0xff8295a6));
+        g.drawText("REAL-TIME VOCAL MIDI CONTROLLER", 23, 46, 290, 15, juce::Justification::centredLeft);
+        g.setColour(running ? cyan : juce::Colour(0xff748798));
+        g.fillEllipse(469.0f, 26.0f, 8.0f, 8.0f);
+        roundedPanel(16, 74, 488, 108);
+        g.setColour(juce::Colour(0xffe4eef4));
+        g.setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+        g.drawText("VOICE INPUT", 30, 82, 160, 22, juce::Justification::centredLeft);
+        // Waveform is drawn from microphone ring-buffer samples; not a decorative animation.
+        const auto end = writeIndex.load(std::memory_order_relaxed);
+        juce::Path wave;
+        const float mid = 141.0f;
+        for (int x = 0; x < 452; ++x)
+        {
+            const auto idx = end > 2048 ? end - 2048 + (uint64_t) (x * 4) : 0;
+            const float sample = ring[idx % ringSize].load(std::memory_order_relaxed);
+            const float y = mid - juce::jlimit(-1.0f, 1.0f, sample * 3.0f) * 26.0f;
+            if (x == 0) wave.startNewSubPath(32.0f, y);
+            else wave.lineTo(32.0f + x, y);
+        }
+        g.setColour(cyan.withAlpha(0.85f));
+        g.strokePath(wave, juce::PathStrokeType(1.7f));
+        roundedPanel(16, 192, 238, 100);
+        roundedPanel(266, 192, 238, 100);
+        g.setColour(juce::Colour(0xff8fa5b5));
+        g.setFont(juce::Font(juce::FontOptions(11.0f)));
+        g.drawText("DETECTED NOTE", 29, 201, 180, 19, juce::Justification::centredLeft);
+        g.drawText("INPUT LEVEL", 278, 201, 170, 19, juce::Justification::centredLeft);
+        g.setColour(cyan);
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("VOICE TO MIDI  /  MODE + SCALE", 22, 301, 460, 17, juce::Justification::centredLeft);
+        roundedPanel(16, 323, 488, 80);
+        g.setColour(cyan);
+        g.drawText("MIDI ROUTING  /  OUTPUT + CHANNEL", 22, 411, 460, 17, juce::Justification::centredLeft);
+        roundedPanel(16, 433, 488, 70);
+        g.setColour(juce::Colour(0xff6e8595));
+        g.setFont(juce::Font(juce::FontOptions(10.0f)));
+        g.drawText("CHM STUDIO  •  EXPERIMENTAL v0.5", 18, 587, 484, 15, juce::Justification::centred);
+    }
     void resized() override
     {
-        auto area = getLocalBounds().reduced(18);
-        status.setBounds(area.removeFromTop(40));
-        auto midiRow = area.removeFromTop(35);
-        refreshButton.setBounds(midiRow.removeFromRight(170));
-        midiSelector.setBounds(midiRow);
-        channelSelector.setBounds(area.removeFromTop(32));
-        modeSelector.setBounds(area.removeFromTop(34));
-        auto scales = area.removeFromTop(34);
-        keySelector.setBounds(scales.removeFromLeft(120));
-        scaleSelector.setBounds(scales);
-        area.removeFromTop(12);
-        gateLabel.setBounds(area.removeFromTop(25));
-        threshold.setBounds(area.removeFromTop(30));
-        noteLabel.setBounds(area.removeFromTop(55));
-        auto buttons = area.removeFromTop(35);
-        recordButton.setBounds(buttons.removeFromLeft(190));
-        saveButton.setBounds(buttons.removeFromLeft(190));
-        panic.setBounds(buttons);
-        area.removeFromTop(12);
-        routingHelp.setBounds(area.removeFromTop(36));
+        noteLabel.setBounds(29, 223, 207, 54);
+        noteLabel.setFont(juce::Font(juce::FontOptions(28.0f, juce::Font::bold)));
+        status.setBounds(279, 224, 210, 50);
+        status.setFont(juce::Font(juce::FontOptions(11.0f)));
+        status.setJustificationType(juce::Justification::centredLeft);
+        audioButton.setBounds(22, 105, 198, 27);
+        threshold.setBounds(310, 104, 181, 29);
+        gateLabel.setBounds(229, 104, 85, 29);
+        modeSelector.setBounds(27, 334, 222, 27);
+        keySelector.setBounds(260, 334, 75, 27);
+        scaleSelector.setBounds(341, 334, 151, 27);
+        recordButton.setBounds(27, 367, 145, 26);
+        saveButton.setBounds(177, 367, 145, 26);
+        panic.setBounds(327, 367, 165, 26);
+        midiSelector.setBounds(27, 445, 249, 28);
+        refreshButton.setBounds(282, 445, 210, 28);
+        channelSelector.setBounds(27, 477, 221, 22);
+        routingHelp.setBounds(254, 477, 238, 22);
+        startButton.setBounds(27, 517, 465, 53);
     }
 private:
     static constexpr int ringSize = 16384;
@@ -116,6 +195,22 @@ private:
     std::atomic<double> sampleRate{44100.0};
     std::atomic<float> gate{0.025f};
     juce::Label status, gateLabel, noteLabel;
+    juce::TextButton audioButton, startButton;
+    bool running = false;
+    void showAudioSettings()
+    {
+        auto* selector = new juce::AudioDeviceSelectorComponent(deviceManager, 1, 2, 0, 0, false, false, true, false);
+        selector->setSize(490, 390);
+        juce::DialogWindow::LaunchOptions options;
+        options.dialogTitle = "CHM - Microphone settings";
+        options.dialogBackgroundColour = juce::Colour(0xff19252d);
+        options.content.setOwned(selector);
+        options.componentToCentreAround = this;
+        options.escapeKeyTriggersCloseButton = true;
+        options.useNativeTitleBar = true;
+        options.resizable = false;
+        options.launchAsync();
+    }
     juce::ComboBox midiSelector, modeSelector, keySelector, scaleSelector, channelSelector;
     juce::TextButton recordButton, saveButton, refreshButton, routingHelp;
     juce::MidiMessageSequence captured;
@@ -240,6 +335,8 @@ private:
     }
     void timerCallback() override
     {
+        repaint();
+        if (!running) return;
         auto now = writeIndex.load(std::memory_order_acquire);
         if (now < windowSize || now == lastRead) return;
         lastRead = now;
@@ -304,7 +401,7 @@ private:
         if (stableFrames >= 2 && note != activeNote)
         {
             stopNote();
-            if (note >= 0 && output)
+            if (note >= 0)
             {
                 activeNote = note;
                 soundingChannel = channelSelector.getSelectedId();
@@ -319,14 +416,14 @@ private:
             }
         }
         noteLabel.setText(note < 0 ? "No stable pitch" : juce::MidiMessage::getMidiNoteName(note, true, true, 3), juce::dontSendNotification);
-        status.setText(output ? "Microphone -> MIDI output active" : "Select a MIDI output port", juce::dontSendNotification);
+        status.setText(output ? "VOICE MIDI RUNNING - output connected" : "Select a MIDI output port", juce::dontSendNotification);
     }
 };
 class VoiceApp final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "CHM Voice MIDI"; }
-    const juce::String getApplicationVersion() override { return "0.3.0"; }
+    const juce::String getApplicationVersion() override { return "0.5.0"; }
     void initialise(const juce::String&) override
     {
         window = std::make_unique<Window>(getApplicationName());
